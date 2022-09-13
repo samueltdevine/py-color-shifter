@@ -22,7 +22,7 @@ Class/method highlighted:
 from contextlib import nullcontext
 from importlib.resources import read_binary
 from mimetypes import init
-import c4d
+import c4d, os, re
 try:
     from RedshiftWrapper.Redshift import Redshift
 except:
@@ -35,9 +35,10 @@ redshift = Redshift()
 colors = []
 expectedColors = []
 targetColors = []
-YOUR_IDENT = 49545
-readpath = None
-writepath = None
+YOUR_IDENT = 0
+# readpath = ""
+# writepath = ""
+
 
 class ColorShifterThread(c4d.threading.C4DThread):
     """Cinema 4D Thread for the ColorShifter Command Plugin"""
@@ -75,67 +76,36 @@ class ColorShifterHelper(object):
 
     def Get(self):
         """gets all colors"""
+        print(colors)
         doc = c4d.documents.GetActiveDocument()
         materialList = doc.GetMaterials()
-        # print(materialList)
         # mat = materialList[0]
-        expectedColor = c4d.Vector(0, 0, 1)
-        targetColor = c4d.Vector(1, 1, 1)
         #for mat in materialList:
         #print(mat[c4d.MATERIAL_COLOR_COLOR])
         colors.clear()
 
         for mat in materialList:
-            master = redshift.GetRSMaterialNodeMaster(mat)
-            print(master)
-            existingColor = mat[c4d.REDSHIFT_SHADER_MATERIAL_DIFFUSE_COLOR]
+            existingColor = mat[c4d.MATERIAL_COLOR_COLOR]
             colors.append(existingColor)
             #if existingColor == expectedColor:
                 #mat[c4d.MATERIAL_COLOR_COLOR] = targetColor
-        # print(materialList)
-        # print(colors)
 
     def Convert(self):
+        print("converting")
         doc = c4d.documents.GetActiveDocument()
         materialList = doc.GetMaterials()
 
         for i, mat in enumerate(materialList):
-             existingColor = mat[c4d.REDSHIFT_SHADER_MATERIAL_DIFFUSE_COLOR]
+             existingColor = mat[c4d.MATERIAL_COLOR_COLOR]
              for e, expectedColor in enumerate(expectedColors):
                 if existingColor == expectedColor:
-                    mat[c4d.REDSHIFT_SHADER_MATERIAL_DIFFUSE_COLOR] = targetColors[e]
+                    mat[c4d.MATERIAL_COLOR_COLOR] = targetColors[e]
         # for i, mat in enumerate(materialList):
         #     existingColor = mat[c4d.MATERIAL_COLOR_COLOR]
         #     if expectedColors[i] == existingColor:
         #         mat[c4d.MATERIAL_COLOR_COLOR] = targetColors[i]
 
     
-    def Write(path, key):
-        #write
-        print(path)
-        hf = c4d.storage.HyperFile()
-        if hf.Open(ident=key, filename=path, mode=c4d.FILEOPEN_WRITE, error_dialog=c4d.FILEDIALOG_NONE):
-            bc = c4d.BaseContainer()
-            bc[0] = expectedColors
-            bc[1] = targetColors
-            hf.WriteContainer(bc)
-            hf.Close()
-        else:
-            c4d.gui.MessageDialog("Cannot open file to write.")
-
-    def Read(path, key):
-        #read
-        hf = c4d.storage.HyperFile()
-        if hf.Open(ident=key, filename=path, mode=c4d.FILEOPEN_READ, error_dialog=c4d.FILEDIALOG_NONE):
-            bc = hf.ReadContainer()
-            hf.Close()
-            expectedColors = bc[0]
-            targetColors = bc[1] #output: test 3
-        else:
-            c4d.gui.MessageDialog("Cannot open file to read.")
-
-#    Write(path, YOUR_IDENT)
-#    Read(path, YOUR_IDENT)
 
 class ColorShifterDlg(c4d.gui.GeDialog, ColorShifterHelper):
     """Main dialog for the Texture Baker"""
@@ -156,6 +126,60 @@ class ColorShifterDlg(c4d.gui.GeDialog, ColorShifterHelper):
     aborted = False
     ColorShifterThread = None
     infoText = None
+
+    def Write(self, path, key):
+    #write
+
+        expectedString = ''
+        for el in colors:
+            expectedString += str(el)
+            expectedString += "|"
+        targetString = ''
+        for el in targetColors:
+            targetString += str(el)
+            targetString += "|"
+        print(targetString)
+        print(expectedString)
+        # targetString = str2.join(expectedColors)
+        hf = c4d.storage.HyperFile()
+        if hf.Open(ident=key, filename=path, mode=c4d.FILEOPEN_WRITE, error_dialog=c4d.FILEDIALOG_NONE):
+            bc = c4d.BaseContainer()
+            bc[0] = expectedString
+            bc[1] = targetString
+            hf.WriteContainer(bc)
+            hf.Close()
+        else:
+            c4d.gui.MessageDialog("Cannot open file to write.")
+
+
+    def Read(self, path, key):
+        def StringToVector(str):
+            split = re.split(r'[(,)]', str)
+            vector = c4d.Vector(float(split[1]),float(split[2]),float(split[3]))
+            print(vector)
+            return vector
+        hf = c4d.storage.HyperFile()
+        if hf.Open(ident=key, filename=path, mode=c4d.FILEOPEN_READ, error_dialog=c4d.FILEDIALOG_NONE):
+            bc = hf.ReadContainer()
+            hf.Close()
+            expectedString = bc[0]
+            targetString = bc[1]
+            colorsList = expectedString.split("|")
+            colorsList.pop()
+            colors.clear()
+            for c in colorsList:
+                cVec = StringToVector(c)
+                colors.append(cVec)
+            targetColorsList= targetString.split("|")
+            targetColorsList.pop()
+            targetColors.clear()
+            for t in targetColorsList:
+                tVec = StringToVector(t)
+                targetColors.append(tVec)
+        else:
+            c4d.gui.MessageDialog("Cannot open file to read.")
+
+
 
     def InitValues(self):
         self.SetString(self.PATH_SAVE, "Save File Path", flags=c4d.EDITTEXT_HELPTEXT)
@@ -196,6 +220,7 @@ class ColorShifterDlg(c4d.gui.GeDialog, ColorShifterHelper):
 
         return True
 
+    
    
     
 
@@ -210,35 +235,72 @@ class ColorShifterDlg(c4d.gui.GeDialog, ColorShifterHelper):
         Returns:
             bool: False if there was an error, otherwise True.
         """
+        def updateTargetColors(id):
+            targetColors.clear()
+            for idx, color in enumerate(colors):
+                ID=8000+idx
+                color = self.GetColorField(ID)["color"]
+                targetColors.append(color)
+            idToIndex = id-8000
+            # print(idToIndex)
+            color = self.GetColorField(id)["color"]
+            # print(targetColors)
+            targetColors[idToIndex] = color
+            # print(targetColors, "changed")
+
+        if(id >= 8000 and id < 9000):
+            updateTargetColors(id)
         if id == self.BUTTON_SAVE:
+            write = self.GetString(self.PATH_SAVE)
+            writepath = write
+            # print(writepath)
             self.Write(writepath, YOUR_IDENT)
 
-        if id == self.BUTTON_SAVE:
+        if id == self.BUTTON_LOAD:
+            read = self.GetString(self.PATH_LOAD)
+            readpath = read
             self.Read(readpath, YOUR_IDENT)
+            # print(colors)
+            # print(targetColors)
+            self.LayoutFlushGroup(2001)
+            self.GroupBegin(id=4000, flags=c4d.BFH_SCALEFIT, cols=2, rows= 1, title="Swatches", groupflags=0)
+            for idx, color in enumerate(colors):
+                targetColor = targetColors[idx]
+                print(idx)
+                self.AddColorField(id=9000+idx ,flags=c4d.BFH_LEFT, initw=0, inith=20, colorflags=0)
+                self.AddColorField(id=8000+idx ,flags=c4d.BFH_RIGHT, initw=0, inith=20, colorflags=0)
+                self.SetColorField(id=9000+idx , color=color, brightness=100, maxbrightness=100, flags=0)
+                self.SetColorField(id=8000+idx , color=targetColor, brightness=100, maxbrightness=100, flags=0)
+            self.LayoutChanged(2001)
+            self.GroupEnd()
+            updateTargetColors(8001)
+
+
 
         if id == self.BUTTON_GET:
             self.Get()
-            # self.LayoutFlushGroup(2001)
-            # self.GroupBegin(id=4000, flags=c4d.BFH_SCALEFIT, cols=2, rows= 1, title="Swatches", groupflags=0)
-            # for idx, color in enumerate(colors):
-            #     self.AddColorField(id=9000+idx ,flags=c4d.BFH_LEFT, initw=0, inith=20, colorflags=0)
-            #     self.AddColorField(id=8000+idx ,flags=c4d.BFH_RIGHT, initw=0, inith=20, colorflags=0)
-            #     self.SetColorField(id=9000+idx , color=color, brightness=100, maxbrightness=100, flags=0)
-            # self.LayoutChanged(2001)
+            self.LayoutFlushGroup(2001)
+            self.GroupBegin(id=4000, flags=c4d.BFH_SCALEFIT, cols=2, rows= 1, title="Swatches", groupflags=0)
+            for idx, color in enumerate(colors):
+                self.AddColorField(id=9000+idx ,flags=c4d.BFH_LEFT, initw=0, inith=20, colorflags=0)
+                self.AddColorField(id=8000+idx ,flags=c4d.BFH_RIGHT, initw=0, inith=20, colorflags=0)
+                self.SetColorField(id=9000+idx , color=color, brightness=100, maxbrightness=100, flags=0)
+            self.LayoutChanged(2001)
             self.GroupEnd()
 
         
         if id == self.PATH_SAVE:
-            readpath = self.GetString(self.PATH_SAVE)
-            #print(writepath)
+            write = self.GetString(self.PATH_SAVE)
+            writepath = os.path.join(write)
+            print(writepath)
         
         if id == self.PATH_LOAD:
-            readpath = self.GetString(self.PATH_LOAD)
+            read = self.GetString(self.PATH_LOAD)
+            readpath = os.path.join(read)
             #print(readpath)
         
         if id == self.BUTTON_CONVERT:
-            colorAmt = len(colors)
-            targetColors.clear()
+            # targetColors.clear()
             expectedColors.clear()
             for idx, color in enumerate(colors):
                 ID=8000+idx
@@ -246,9 +308,9 @@ class ColorShifterDlg(c4d.gui.GeDialog, ColorShifterHelper):
                 targetColors.append(color)
             
             for idx, color in enumerate(colors):
-                ID=9000+idx
-                color = self.GetColorField(ID)["color"]
-                expectedColors.append(color)
+                 ID=9000+idx
+                 color = self.GetColorField(ID)["color"]
+                 expectedColors.append(color)
 
 
             # print(self.GetColorField(ID))
