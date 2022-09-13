@@ -19,14 +19,25 @@ Class/method highlighted:
     - CommandData.RestoreLayout()
 
 """
+from contextlib import nullcontext
+from importlib.resources import read_binary
+from mimetypes import init
 import c4d
+try:
+    from RedshiftWrapper.Redshift import Redshift
+except:
+    raise RuntimeError("Could not import Redshift.")
+    
 
 # Be sure to use a unique ID obtained from www.plugincafe.com
 PLUGIN_ID = 1060022
-
+redshift = Redshift()
 colors = []
 expectedColors = []
 targetColors = []
+YOUR_IDENT = 49545
+readpath = None
+writepath = None
 
 class ColorShifterThread(c4d.threading.C4DThread):
     """Cinema 4D Thread for the ColorShifter Command Plugin"""
@@ -50,57 +61,6 @@ class ColorShifterThread(c4d.threading.C4DThread):
         self.bakeBmp = c4d.bitmaps.MultipassBitmap(512, 512, c4d.COLORMODE_RGB)
         self.bakeError = c4d.BAKE_TEX_ERR_NONE
 
-    # def Begin(self):
-    #     """Setups and starts the texture baking thread."""
-
-    #     # Defines baking setting
-    #     bakeData = c4d.BaseContainer()
-    #     bakeData[c4d.BAKE_TEX_WIDTH] = 512
-    #     bakeData[c4d.BAKE_TEX_HEIGHT] = 512
-    #     bakeData[c4d.BAKE_TEX_PIXELBORDER] = 1
-    #     bakeData[c4d.BAKE_TEX_CONTINUE_UV] = False
-    #     bakeData[c4d.BAKE_TEX_SUPERSAMPLING] = 0
-    #     bakeData[c4d.BAKE_TEX_FILL_COLOR] = c4d.Vector(1)
-    #     bakeData[c4d.BAKE_TEX_USE_BUMP] = False
-    #     bakeData[c4d.BAKE_TEX_USE_CAMERA_VECTOR] = False
-    #     bakeData[c4d.BAKE_TEX_AUTO_SIZE] = False
-    #     bakeData[c4d.BAKE_TEX_NO_GI] = False
-    #     bakeData[c4d.BAKE_TEX_GENERATE_UNDO] = False
-    #     bakeData[c4d.BAKE_TEX_PREVIEW] = False
-    #     bakeData[c4d.BAKE_TEX_COLOR] = True
-    #     bakeData[c4d.BAKE_TEX_UV_LEFT] = 0.0
-    #     bakeData[c4d.BAKE_TEX_UV_RIGHT] = 1.0
-    #     bakeData[c4d.BAKE_TEX_UV_TOP] = 0.0
-    #     bakeData[c4d.BAKE_TEX_UV_BOTTOM] = 1.0
-    #     # bakeData[c4d.BAKE_TEX_OPTIMAL_MAPPING] = c4d.BAKE_TEX_OPTIMAL_MAPPING_CUBIC
-
-    #     self.bakeData = bakeData
-
-    #     # Initializes bake process
-    #     bakeInfo = c4d.utils.InitBakeTexture(self.doc, self.textags, self.texuvws, self.destuvws, self.bakeData, self.Get())
-    #     self.bakeDoc = bakeInfo[0]
-    #     self.bakeError = bakeInfo[1]
-
-    #     if self.bakeError != c4d.BAKE_TEX_ERR_NONE or self.bakeDoc is None:
-    #         return False
-
-    #     # Starts bake thread
-    #     self.Start(c4d.THREADMODE_ASYNC, c4d.THREADPRIORITEXY_BELOW)
-
-    #     return True
-
-    # def BakeTextureHook(self, info):
-    #     # Texture Baker hook, currently not used
-    #     # print info
-    #     pass
-
-    # def Main(self):
-    #     # Bake Texture Thread Main routine
-    #     self.bakeError = c4d.utils.BakeTexture(self.bakeDoc, self.bakeData, self.bakeBmp, self.Get(), self.BakeTextureHook)
-
-    #     # Sends core message once baking has finished
-    #     c4d.SpecialEventAdd(PLUGIN_ID)
-
 
 class ColorShifterHelper(object):
 
@@ -115,9 +75,9 @@ class ColorShifterHelper(object):
 
     def Get(self):
         """gets all colors"""
-        print(colors)
         doc = c4d.documents.GetActiveDocument()
         materialList = doc.GetMaterials()
+        # print(materialList)
         # mat = materialList[0]
         expectedColor = c4d.Vector(0, 0, 1)
         targetColor = c4d.Vector(1, 1, 1)
@@ -126,79 +86,56 @@ class ColorShifterHelper(object):
         colors.clear()
 
         for mat in materialList:
-            existingColor = mat[c4d.MATERIAL_COLOR_COLOR]
+            master = redshift.GetRSMaterialNodeMaster(mat)
+            print(master)
+            existingColor = mat[c4d.REDSHIFT_SHADER_MATERIAL_DIFFUSE_COLOR]
             colors.append(existingColor)
             #if existingColor == expectedColor:
                 #mat[c4d.MATERIAL_COLOR_COLOR] = targetColor
+        # print(materialList)
+        # print(colors)
 
     def Convert(self):
         doc = c4d.documents.GetActiveDocument()
         materialList = doc.GetMaterials()
 
         for i, mat in enumerate(materialList):
-             existingColor = mat[c4d.MATERIAL_COLOR_COLOR]
+             existingColor = mat[c4d.REDSHIFT_SHADER_MATERIAL_DIFFUSE_COLOR]
              for e, expectedColor in enumerate(expectedColors):
                 if existingColor == expectedColor:
-                    mat[c4d.MATERIAL_COLOR_COLOR] = targetColors[e]
+                    mat[c4d.REDSHIFT_SHADER_MATERIAL_DIFFUSE_COLOR] = targetColors[e]
         # for i, mat in enumerate(materialList):
         #     existingColor = mat[c4d.MATERIAL_COLOR_COLOR]
         #     if expectedColors[i] == existingColor:
         #         mat[c4d.MATERIAL_COLOR_COLOR] = targetColors[i]
 
+    
+    def Write(path, key):
+        #write
+        print(path)
+        hf = c4d.storage.HyperFile()
+        if hf.Open(ident=key, filename=path, mode=c4d.FILEOPEN_WRITE, error_dialog=c4d.FILEDIALOG_NONE):
+            bc = c4d.BaseContainer()
+            bc[0] = expectedColors
+            bc[1] = targetColors
+            hf.WriteContainer(bc)
+            hf.Close()
+        else:
+            c4d.gui.MessageDialog("Cannot open file to write.")
 
-    def Bake(self):
-        """Bake the active object to texture"""
-        # Retrieves selected document
-        doc = c4d.documents.GetActiveDocument()
-        if doc is None:
-            return
+    def Read(path, key):
+        #read
+        hf = c4d.storage.HyperFile()
+        if hf.Open(ident=key, filename=path, mode=c4d.FILEOPEN_READ, error_dialog=c4d.FILEDIALOG_NONE):
+            bc = hf.ReadContainer()
+            hf.Close()
+            expectedColors = bc[0]
+            targetColors = bc[1] #output: test 3
+        else:
+            c4d.gui.MessageDialog("Cannot open file to read.")
 
-        # Retrieves selected objects
-        obj = doc.GetActiveObject()
-        if obj is None:
-            self.SetString(self.infoText, "Bake Init Failed: Select one single object")
-            return
-
-        # Retrieves texture and UVW tags from the selected object
-        uvwTag = obj.GetTag(c4d.Tuvw)
-        if uvwTag is None:
-            self.SetString(self.infoText, "Bake Init Failed: No uv tag found")
-            return
-
-        tags = obj.GetTags()
-        textags, texuvws, destuvws = [], [], []
-        for tag in tags:
-            if tag.CheckType(c4d.Ttexture):
-                textags.append(tag)
-                texuvws.append(uvwTag)
-                destuvws.append(uvwTag)
-
-        if len(textags) == 0:
-            self.SetString(self.infoText, "Bake Init Failed: No texture tag found")
-            return
-
-        # Initializes and start texture baker thread
-        self.aborted = False
-        self.ColorShifterThread = ColorShifterThread(doc, textags, texuvws, destuvws)
-
-        # Initializes the thread
-        if not self.ColorShifterThread.Begin():
-            # In case of errors, notifies the user
-            print("Bake Init Failed: Error " + str(self.ColorShifterThread.bakeError))
-            self.SetString(self.infoText, str("Bake Init Failed: Error " + str(self.ColorShifterThread.bakeError)))
-
-        # Sets Button enable states so cancel button can be pressed
-        self.EnableButtons(True)
-        self.SetString(self.infoText, "Baking")
-
-    def Abort(self):
-        """Cancels the baking progress"""
-        # Checks if there is a baking process currently
-        if self.ColorShifterThread and self.ColorShifterThread.IsRunning():
-            self.aborted = True
-            self.ColorShifterThread.End()
-            self.ColorShifterThread = None
-
+#    Write(path, YOUR_IDENT)
+#    Read(path, YOUR_IDENT)
 
 class ColorShifterDlg(c4d.gui.GeDialog, ColorShifterHelper):
     """Main dialog for the Texture Baker"""
@@ -208,11 +145,21 @@ class ColorShifterDlg(c4d.gui.GeDialog, ColorShifterHelper):
     BUTTON_ABORT = 1001
     ID_PALLETTE = 2001
     ID_MAIN = 3000
-    ID_SWATCH_GROUP = 4000
+    ID_SAVE_LOAD = 4000
+    BUTTON_SAVE = 4001
+    BUTTON_LOAD = 4002
+    PATH_SAVE = 4003
+    PATH_LOAD = 4004
+    PATH_SAVE_STR = 4005
+    PATH_LOAD_STR = 4006
 
     aborted = False
     ColorShifterThread = None
     infoText = None
+
+    def InitValues(self):
+        self.SetString(self.PATH_SAVE, "Save File Path", flags=c4d.EDITTEXT_HELPTEXT)
+        self.SetString(self.PATH_LOAD, "Load File Path", flags=c4d.EDITTEXT_HELPTEXT)
 
     def CreateLayout(self):
         """This Method is called automatically when Cinema 4D Create the Layout (display) of the Dialog."""
@@ -221,15 +168,19 @@ class ColorShifterDlg(c4d.gui.GeDialog, ColorShifterHelper):
         self.MenuFlushAll()
         # self.LayoutFlushGroup(2001)
 
-        self.GroupBegin(id=3000, flags=c4d.BFH_SCALEFIT, cols=2, rows= 1, title="", groupflags=0)
+        self.GroupBegin(id=3000, flags=c4d.BFH_SCALEFIT, cols=2, rows= 1, title="Get and Convert", groupflags=0)
         # Creates 2 buttons for Bake / Abort button
         self.AddButton(id=self.BUTTON_GET, flags=c4d.BFH_LEFT, initw=100, inith=25, name="Get Colors")
         self.AddButton(id=self.BUTTON_CONVERT, flags=c4d.BFH_RIGHT, initw=100, inith=25, name="Convert Colors")
-            #self.AddButton(id=self.BUTTON_BAKE, flags=c4d.BFH_LEFT, initw=100, inith=25, name="Bake")
-            #self.AddButton(id=self.BUTTON_ABORT, flags=c4d.BFH_LEFT, initw=100, inith=25, name="Abort")
-            # for color in colors:
-            #             self.AddColorField(id=self.BUTTON_COLOR,flags=c4d.BFH_LEFT, initw=0, inith=80, colorflags=0)
 
+        self.GroupEnd()
+        self.AddEditText(id=self.PATH_SAVE, flags=c4d.BFH_LEFT, initw=300, inith=10, editflags=c4d.EDITTEXT_HELPTEXT)
+        self.AddEditText(id=self.PATH_LOAD, flags=c4d.BFH_LEFT, initw=300, inith=10,editflags=c4d.EDITTEXT_HELPTEXT)
+
+        self.GroupBegin(id=self.ID_SAVE_LOAD, flags=c4d.BFH_SCALEFIT, cols=2, rows= 1, title="Save and Load", groupflags=0)
+
+        self.AddButton(id=self.BUTTON_SAVE, flags=c4d.BFH_LEFT, initw=100, inith=25, name="Save")
+        self.AddButton(id=self.BUTTON_LOAD, flags=c4d.BFH_RIGHT, initw=100, inith=25, name="Load")
         self.GroupEnd()
         self.GroupBegin(id=2001, flags=c4d.BFH_SCALEFIT, cols=2, rows= 1, title="", groupflags=0)
 
@@ -259,24 +210,32 @@ class ColorShifterDlg(c4d.gui.GeDialog, ColorShifterHelper):
         Returns:
             bool: False if there was an error, otherwise True.
         """
-        if id == self.BUTTON_BAKE:
-            self.Bake()
+        if id == self.BUTTON_SAVE:
+            self.Write(writepath, YOUR_IDENT)
 
-        elif id == self.BUTTON_ABORT:
-            self.Abort()
+        if id == self.BUTTON_SAVE:
+            self.Read(readpath, YOUR_IDENT)
 
         if id == self.BUTTON_GET:
             self.Get()
-            self.LayoutFlushGroup(2001)
-            self.GroupBegin(id=4000, flags=c4d.BFH_SCALEFIT, cols=2, rows= 1, title="Swatches", groupflags=0)
-            for idx, color in enumerate(colors):
-                self.AddColorField(id=9000+idx ,flags=c4d.BFH_LEFT, initw=0, inith=20, colorflags=0)
-                self.AddColorField(id=8000+idx ,flags=c4d.BFH_RIGHT, initw=0, inith=20, colorflags=0)
-                self.SetColorField(id=9000+idx , color=color, brightness=100, maxbrightness=100, flags=0)
-            self.LayoutChanged(2001)
+            # self.LayoutFlushGroup(2001)
+            # self.GroupBegin(id=4000, flags=c4d.BFH_SCALEFIT, cols=2, rows= 1, title="Swatches", groupflags=0)
+            # for idx, color in enumerate(colors):
+            #     self.AddColorField(id=9000+idx ,flags=c4d.BFH_LEFT, initw=0, inith=20, colorflags=0)
+            #     self.AddColorField(id=8000+idx ,flags=c4d.BFH_RIGHT, initw=0, inith=20, colorflags=0)
+            #     self.SetColorField(id=9000+idx , color=color, brightness=100, maxbrightness=100, flags=0)
+            # self.LayoutChanged(2001)
             self.GroupEnd()
-            print("flushed")
 
+        
+        if id == self.PATH_SAVE:
+            readpath = self.GetString(self.PATH_SAVE)
+            #print(writepath)
+        
+        if id == self.PATH_LOAD:
+            readpath = self.GetString(self.PATH_LOAD)
+            #print(readpath)
+        
         if id == self.BUTTON_CONVERT:
             colorAmt = len(colors)
             targetColors.clear()
